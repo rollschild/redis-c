@@ -37,6 +37,9 @@
 
             # Development time dependencies
             gtest
+
+            clang-tools
+            llvm.clang
           ];
 
           buildInputs = with pkgs;
