@@ -38,4 +38,30 @@
 - `connect()`
   - takes a socket fd and address
   - makes a TCP connection to that address
--
+
+### Protocol Parsing
+
+- Used to spilt requests apart from the TCP byte stream
+- Current scheme:
+
+```txt
++-----+-----+-----+-----+----------
+| len | msg1 | len | msg2 | more...
++-----+-----+-----+-----+----------
+```
+
+- Two parts:
+  - 4-byte **little-endian** integer - length of the request
+  - variable-length request
+
+#### Protocol Desgin
+
+##### Text vs. Binary
+
+- Text
+  - human-readable
+  - HTTP
+  - hard to parse - variable-length strings
+- **Avoid unnecessary variable-length components**
+- protocol parsing currently uses 2 `read()` syscalls
+  - could use a **buffered I/O**
