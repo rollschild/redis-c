@@ -65,3 +65,53 @@
 - **Avoid unnecessary variable-length components**
 - protocol parsing currently uses 2 `read()` syscalls
   - could use a **buffered I/O**
+
+### Event Loop and Non-blocking I/O
+
+- Three ways to handle concurrent connections in server-side network programming
+  - **forking**
+    - creates new **processes** for each client connection
+  - **multi-threading**
+    - uses **threads** instead of processes
+  - **event loops**
+    - polling
+    - non-blocking I/O
+- Use `poll` to determine which fd can be operated _without_ blocking
+- when an I/O operation is done on an fd, it should be _non-blocking_
+- In _blocking_ mode,
+  - `read` blocks the caller when there are no data in the kernel
+  - `write` blocks when the write buffer is full
+  - `accept` blocks when there are no new connections in the kernel queue
+- In **non-blocking** mode
+  - operations either success without blocking, or
+  - fail with errno `EAGAIN` - not ready
+  - non-blocking operations that fail with `EAGAIN` _must be retried_ after the readiness was notified by `poll`
+- `poll` is the _SOLE_ blocking operation in an **event loop**
+- All blocking networking IO APIs (`read`, `write`, `accept`) have a _nonblocking_ mode
+- APIs that do not have a non-blocking mode (`gethostbyname`, disk IOs) should be performed in **thread pools**
+- Timers should also implemented within the event loop since we cannot `sleep` inside
+- Also `select` and `epoll` on Linux
+  - `epoll` consists of 3 syscalls:
+    - `epoll_create`
+    - `epoll_wait`
+    - `epoll_ctl`
+  - stateful API
+  - used to manipulate an fd set create by `epoll_create`, which is operated upon by `epoll_wait`
+
+#### Implementation
+
+- Need buffers for reading/writing
+  - in nonblocking mode, IO operations are often _deferred_
+- `poll()`
+  - `poll()` is actually _horribly_ slow for large number of connections
+  - Use a dedicated event lib such as `libevent` instead
+  - ask the OS to let us know when some data is ready to read on which sockets
+- Plan of using `poll()`:
+  - Keep an array of `struct pollfd`s with info about:
+    - which socket descriptors should be monitored
+    - what kind of events we want to monitor for
+  - OS will _block_ on the `poll()` call _until_ one of the events occurs or user-specified timeout occurs
+- For a request/response protocol, clients are _not_ limited to sending one request and waiting for the response at a time
+  - could save some latency
+  - ****pipelining****
+-
