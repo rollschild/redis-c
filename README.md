@@ -113,5 +113,29 @@
   - OS will _block_ on the `poll()` call _until_ one of the events occurs or user-specified timeout occurs
 - For a request/response protocol, clients are _not_ limited to sending one request and waiting for the response at a time
   - could save some latency
-  - ****pipelining****
+  - \***\*pipelining\*\***
+
+### `get`, `set`, `del`
+
+- _command_: list of strings, such as `set key val`
+- Scheme of the command:
+  - `nstr` - number of strings - 4 bytes
+  - `len` - length of the following string - 4 bytes
+
+```txt
++------+-----+------+-----+------+-----+-----+------+
+| nstr | len | str1 | len | str2 | ... | len | strn |
++------+-----+------+-----+------+-----+-----+------+
+```
+
+- Scheme of the response:
+  - `res` - 4-byte status code
+  - `data` - response string
+
+```txt
++-----+---------
+| res | data...
++-----+---------
+```
+
 -

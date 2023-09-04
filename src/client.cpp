@@ -7,8 +7,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <netinet/in.h>
+#include <string>
 #include <sys/socket.h>
 #include <unistd.h>
+#include <vector>
 
 static int32_t query(int fd, const char *text) {
     uint32_t len = (uint32_t)strlen(text);
@@ -57,15 +59,28 @@ static int32_t query(int fd, const char *text) {
     return 0;
 }
 
-static int32_t send_req(int fd, const char *text) {
-    uint32_t len = (uint32_t)strlen(text);
+static int32_t send_req(int fd, const std::vector<std::string> &cmd) {
+    uint32_t len = 4; // length of nstr itself, 4 bytes
+    for (const std::string &s : cmd) {
+        len += 4 + s.size(); // length of cmd + cmd itself
+    }
+
     if (len > K_MAX_MSG) {
         return -1;
     }
 
-    char wbuf[4 + K_MAX_MSG]{};
-    memcpy(wbuf, &len, 4);
-    memcpy(&wbuf[4], text, len);
+    char wbuf[4 + K_MAX_MSG]{}; // length of the entire write buffer
+    memcpy(&wbuf[0], &len, 4);  // nstr + all cmds
+    uint32_t n = cmd.size();    // number of commands in the cmd vector
+    memcpy(&wbuf[4], &n, 4);
+    size_t curr_pos = 8;
+
+    for (const std::string &s : cmd) {
+        uint32_t sz = (uint32_t)s.size();
+        memcpy(&wbuf[curr_pos], &sz, 4); // length of the current command
+        memcpy(&wbuf[curr_pos + 4], s.data(), s.size());
+        curr_pos += 4 + s.size();
+    }
 
     return write_all(fd, wbuf, 4 + len);
 }
@@ -99,13 +114,20 @@ static int32_t read_res(int fd) {
         return err;
     }
 
+    uint32_t rescode{};
+    if (len < 4) {
+        msg("bad response");
+        return -1;
+    }
+    memcpy(&rescode, &read_buf[4], 4);
+
     // do something
     read_buf[4 + len] = '\0';
-    printf("server says: %s\n", &read_buf[4]);
+    printf("server says: [%u] %.*s\n", rescode, len - 4, &read_buf[8]);
     return 0;
 }
 
-int main() {
+int main(int argc, char **argv) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0) {
         die("socket()");
@@ -122,22 +144,19 @@ int main() {
         die("connect");
     }
 
-    // multiple **pipelined** requests...
-    const char *query_list[3] = {"hello_1", "hello_2", "hello_3"};
-    for (size_t i{}; i < 3; ++i) {
-        int32_t err = send_req(fd, query_list[i]);
-        if (err) {
-            close(fd);
-            return 0;
-        }
+    std::vector<std::string> cmd{};
+    for (int i = 1; i < argc; ++i) {
+        cmd.push_back(argv[i]);
     }
-
-    for (size_t i{}; i < 3; ++i) {
-        int32_t err = read_res(fd);
-        if (err) {
-            close(fd);
-            return 0;
-        }
+    int32_t err = send_req(fd, cmd);
+    if (err) {
+        close(fd);
+        return 0;
+    }
+    err = read_res(fd);
+    if (err) {
+        close(fd);
+        return 0;
     }
 
     close(fd);

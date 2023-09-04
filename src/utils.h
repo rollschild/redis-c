@@ -6,6 +6,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fcntl.h>
+#include <string>
+#include <strings.h>
 #include <unistd.h>
 
 static void msg(const char *message) { fprintf(stderr, "%s\n", message); }
@@ -63,6 +65,13 @@ static void fd_set_nb(int fd) {
     if (errno) {
         die("fcntl error");
     }
+}
+
+/*
+ * compares two null-terminated strings, ignoring cases
+ */
+static bool cmd_is(const std::string &word, const char *cmd) {
+    return 0 == strcasecmp(word.c_str(), cmd);
 }
 
 #endif /* UTILS_H */
