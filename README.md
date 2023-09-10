@@ -138,4 +138,17 @@
 +-----+---------
 ```
 
+### Data Structure: Hashtables
+
+- Tow kinds of hashtables:
+  - chaining
+  - open addressing
+- Main difference: **collision resolution**
+  - **open addressing**: seeks another free slot in the event of a collision
+  - **chaining**: groups conflicting keys with a **linked list**
+
+#### Progressive Resizing
+
+- When needing more space for the hashtable, we resize
+- To avoid stalling the server, keep two hashtables and _gradually_ move nodes between them
 -

@@ -1,4 +1,5 @@
 #include "constants.h"
+#include "hashtable.h"
 #include "utils.h"
 #include <arpa/inet.h>
 #include <cassert>
@@ -18,6 +19,22 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <vector>
+
+// pointer arithmetics to convert the pointer to HNode to pointer to Entry
+// using `typeof` gives me the following error:
+// `ISO C++ forbids declaration of ‘typeof’ with no type [-fpermissive]`
+#define container_of(ptr, type, member)                                        \
+    ({                                                                         \
+        const decltype(((type *)0)->member) *__mptr = (ptr);                   \
+        (type *)((char *)__mptr - offsetof(type, member));                     \
+    })
+/**
+ * `offsetof` is a macro
+ * expands to an integral constant expression of type size_t
+ * offset of from the beginning of an object of specified type to its specified
+ * subobject
+ * **noexcept**
+ */
 
 static void do_something(int conn_fd) {
     /*
@@ -148,33 +165,103 @@ static void state_res(Conn *conn) {
 }
 
 static std::map<std::string, std::string> g_map{};
+struct Entry {
+    struct HNode node;
+    std::string key;
+    std::string val;
+};
+static struct { HMap db; } g_data;
 
-static uint32_t do_get(const std::vector<std::string> &cmd, uint8_t *res,
+static bool entry_eq(HNode *lhs, HNode *rhs) {
+    struct Entry *le = container_of(lhs, struct Entry, node);
+    struct Entry *re = container_of(rhs, struct Entry, node);
+    return lhs->hcode == rhs->hcode && le->key == re->key;
+}
+
+// static uint32_t do_get(const std::vector<std::string> &cmd, uint8_t *res,
+//                        uint32_t *reslen) {
+//     if (!g_map.count(cmd[1])) {
+//         return RES_NX;
+//     }
+//
+//     std::string &val = g_map[cmd[1]];
+//     assert(val.size() <= K_MAX_MSG);
+//     memcpy(res, val.data(), val.size());
+//     *reslen = (uint32_t)val.size();
+//     return RES_OK;
+// }
+
+static uint32_t do_get(std::vector<std::string> &cmd, uint8_t *res,
                        uint32_t *reslen) {
-    if (!g_map.count(cmd[1])) {
+    Entry entry;
+    entry.key.swap(cmd[1]); // set cmd[1] to be the key in entry
+    entry.node.hcode = str_hash((uint8_t *)entry.key.data(), entry.key.size());
+
+    HNode *node = hm_lookup(&g_data.db, &entry.node, &entry_eq);
+    if (!node) {
         return RES_NX;
     }
 
-    std::string &val = g_map[cmd[1]];
+    const std::string &val = container_of(node, Entry, node)->val;
     assert(val.size() <= K_MAX_MSG);
+
     memcpy(res, val.data(), val.size());
     *reslen = (uint32_t)val.size();
     return RES_OK;
 }
 
-static uint32_t do_set(const std::vector<std::string> &cmd, uint8_t *res,
+/* static uint32_t do_set(const std::vector<std::string> &cmd, uint8_t *res,
                        uint32_t *reslen) {
     (void)res;
     (void)reslen;
     g_map[cmd[1]] = cmd[2];
     return RES_OK;
+} */
+static uint32_t do_set(std::vector<std::string> &cmd, uint8_t *res,
+                       uint32_t *reslen) {
+    (void)res;
+    (void)reslen;
+
+    Entry entry;
+    entry.key.swap(cmd[1]);
+    entry.node.hcode = str_hash((uint8_t *)entry.key.data(), entry.key.size());
+
+    HNode *node = hm_lookup(&g_data.db, &entry.node, &entry_eq);
+    if (node) {
+        // node already exists
+        container_of(node, Entry, node)->val.swap(cmd[2]);
+    } else {
+        Entry *new_entry = new Entry();
+        new_entry->key.swap(entry.key);
+        new_entry->node.hcode = entry.node.hcode;
+        new_entry->val.swap(cmd[2]);
+        hm_insert(&g_data.db, &new_entry->node);
+    }
+
+    return RES_OK;
 }
 
-static uint32_t do_del(const std::vector<std::string> &cmd, uint8_t *res,
+/* static uint32_t do_del(const std::vector<std::string> &cmd, uint8_t *res,
                        uint32_t *reslen) {
     (void)res;
     (void)reslen;
     g_map.erase(cmd[1]);
+    return RES_OK;
+} */
+
+static uint32_t do_del(std::vector<std::string> &cmd, uint8_t *res,
+                       uint32_t *reslen) {
+    (void)res;
+    (void)reslen;
+
+    Entry entry;
+    entry.key.swap(cmd[1]);
+    entry.node.hcode = str_hash((uint8_t *)entry.key.data(), entry.key.size());
+
+    HNode *node = hm_pop(&g_data.db, &entry.node, &entry_eq);
+    if (node) {
+        delete container_of(node, Entry, node);
+    }
     return RES_OK;
 }
 

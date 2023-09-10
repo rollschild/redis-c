@@ -3,6 +3,8 @@
 
 #include <cassert>
 #include <cerrno>
+#include <cstddef>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <fcntl.h>
@@ -72,6 +74,17 @@ static void fd_set_nb(int fd) {
  */
 static bool cmd_is(const std::string &word, const char *cmd) {
     return 0 == strcasecmp(word.c_str(), cmd);
+}
+
+/*
+ * Fowler–Noll–Vo
+ */
+static uint64_t str_hash(const uint8_t *data, size_t len) {
+    uint32_t hash = 0x811C9DC5;
+    for (size_t i = 0; i < len; ++i) {
+        hash = (hash + data[i]) * 0x811C9DC5;
+    }
+    return hash;
 }
 
 #endif /* UTILS_H */
