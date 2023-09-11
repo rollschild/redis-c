@@ -20,22 +20,6 @@
 #include <unistd.h>
 #include <vector>
 
-// pointer arithmetics to convert the pointer to HNode to pointer to Entry
-// using `typeof` gives me the following error:
-// `ISO C++ forbids declaration of ‘typeof’ with no type [-fpermissive]`
-#define container_of(ptr, type, member)                                        \
-    ({                                                                         \
-        const decltype(((type *)0)->member) *__mptr = (ptr);                   \
-        (type *)((char *)__mptr - offsetof(type, member));                     \
-    })
-/**
- * `offsetof` is a macro
- * expands to an integral constant expression of type size_t
- * offset of from the beginning of an object of specified type to its specified
- * subobject
- * **noexcept**
- */
-
 static void do_something(int conn_fd) {
     /*
      * `read()` and `write()` returns the number of read/written bytes
@@ -165,11 +149,6 @@ static void state_res(Conn *conn) {
 }
 
 static std::map<std::string, std::string> g_map{};
-struct Entry {
-    struct HNode node;
-    std::string key;
-    std::string val;
-};
 static struct { HMap db; } g_data;
 
 static bool entry_eq(HNode *lhs, HNode *rhs) {
@@ -191,23 +170,20 @@ static bool entry_eq(HNode *lhs, HNode *rhs) {
 //     return RES_OK;
 // }
 
-static uint32_t do_get(std::vector<std::string> &cmd, uint8_t *res,
-                       uint32_t *reslen) {
+static void do_get(std::vector<std::string> &cmd, std::string &out) {
     Entry entry;
     entry.key.swap(cmd[1]); // set cmd[1] to be the key in entry
     entry.node.hcode = str_hash((uint8_t *)entry.key.data(), entry.key.size());
 
     HNode *node = hm_lookup(&g_data.db, &entry.node, &entry_eq);
     if (!node) {
-        return RES_NX;
+        return out_nil(out);
     }
 
     const std::string &val = container_of(node, Entry, node)->val;
     assert(val.size() <= K_MAX_MSG);
 
-    memcpy(res, val.data(), val.size());
-    *reslen = (uint32_t)val.size();
-    return RES_OK;
+    out_str(out, val);
 }
 
 /* static uint32_t do_set(const std::vector<std::string> &cmd, uint8_t *res,
@@ -217,11 +193,7 @@ static uint32_t do_get(std::vector<std::string> &cmd, uint8_t *res,
     g_map[cmd[1]] = cmd[2];
     return RES_OK;
 } */
-static uint32_t do_set(std::vector<std::string> &cmd, uint8_t *res,
-                       uint32_t *reslen) {
-    (void)res;
-    (void)reslen;
-
+static void do_set(std::vector<std::string> &cmd, std::string &out) {
     Entry entry;
     entry.key.swap(cmd[1]);
     entry.node.hcode = str_hash((uint8_t *)entry.key.data(), entry.key.size());
@@ -238,7 +210,7 @@ static uint32_t do_set(std::vector<std::string> &cmd, uint8_t *res,
         hm_insert(&g_data.db, &new_entry->node);
     }
 
-    return RES_OK;
+    return out_nil(out);
 }
 
 /* static uint32_t do_del(const std::vector<std::string> &cmd, uint8_t *res,
@@ -249,11 +221,7 @@ static uint32_t do_set(std::vector<std::string> &cmd, uint8_t *res,
     return RES_OK;
 } */
 
-static uint32_t do_del(std::vector<std::string> &cmd, uint8_t *res,
-                       uint32_t *reslen) {
-    (void)res;
-    (void)reslen;
-
+static void do_del(std::vector<std::string> &cmd, std::string &out) {
     Entry entry;
     entry.key.swap(cmd[1]);
     entry.node.hcode = str_hash((uint8_t *)entry.key.data(), entry.key.size());
@@ -262,7 +230,7 @@ static uint32_t do_del(std::vector<std::string> &cmd, uint8_t *res,
     if (node) {
         delete container_of(node, Entry, node);
     }
-    return RES_OK;
+    return out_int(out, node ? 1 : 0);
 }
 
 static int32_t parse_req(const uint8_t *data, size_t len,
@@ -298,7 +266,14 @@ static int32_t parse_req(const uint8_t *data, size_t len,
     return 0;
 }
 
-static int32_t do_request(const uint8_t *req, uint32_t reqlen,
+static void do_keys(std::vector<std::string> &cmd, std::string &out) {
+    (void)cmd;
+    out_arr(out, (uint32_t)hm_size(&g_data.db));
+    h_scan(&g_data.db.ht_to, &cb_scan, &out);
+    h_scan(&g_data.db.ht_from, &cb_scan, &out);
+}
+
+/* static int32_t do_request(const uint8_t *req, uint32_t reqlen,
                           uint32_t *rescode, uint8_t *res, uint32_t *reslen) {
     std::vector<std::string> cmd; // in header <string>, _NOT_ <string.h>
     if (0 != parse_req(req, reqlen, cmd)) {
@@ -321,6 +296,20 @@ static int32_t do_request(const uint8_t *req, uint32_t reqlen,
         return 0;
     }
     return 0;
+} */
+static void do_request(std::vector<std::string> &cmd, std::string &out) {
+    if (cmd.size() == 1 && cmd_is(cmd[0], "keys")) {
+        do_keys(cmd, out);
+    } else if (cmd.size() == 2 && cmd_is(cmd[0], "get")) {
+        do_get(cmd, out);
+    } else if (cmd.size() == 3 && cmd_is(cmd[0], "set")) {
+        do_set(cmd, out);
+    } else if (cmd.size() == 2 && cmd_is(cmd[0], "del")) {
+        do_del(cmd, out);
+    } else {
+        // cmd not recognized
+        out_err(out, ERR_UNKNOWN, "Unknown cmd");
+    }
 }
 
 static bool try_one_request(Conn *conn) {
@@ -347,11 +336,27 @@ static bool try_one_request(Conn *conn) {
     printf("client says: %.*s\n", len,
            &conn->rbuf[4]); // `.*` specifies precision
 
+    // parse the request
+    std::vector<std::string> cmd;
+    if (0 != parse_req(&conn->rbuf[4], len, cmd)) {
+        msg("bad req");
+        conn->state = STATE_END;
+        return false;
+    }
+
     // received one request,
     // generate the response
-    uint32_t rescode{};
-    uint32_t wlen{};
-    // 4 + 4 because: len + status code
+    std::string out;
+    do_request(cmd, out);
+
+    // pack response into the buffer
+    if (4 + out.size() > K_MAX_MSG) {
+        out.clear();
+        out_err(out, ERR_2BIG, "response is too big");
+    }
+    // uint32_t rescode{};
+    uint32_t wlen = (uint32_t)out.size();
+    /* // 4 + 4 because: len + status code
     int32_t err =
         do_request(&conn->rbuf[4], len, &rescode, &conn->wbuf[4 + 4], &wlen);
 
@@ -359,9 +364,9 @@ static bool try_one_request(Conn *conn) {
         conn->state = STATE_END;
         return false;
     }
-    wlen += 4;
+    wlen += 4; */
     memcpy(&conn->wbuf[0], &wlen, 4);
-    memcpy(&conn->wbuf[4], &rescode, 4);
+    memcpy(&conn->wbuf[4], out.data(), out.size());
     conn->wbuf_size = 4 + wlen; // en echo
 
     // remove the request from buffer

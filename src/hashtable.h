@@ -2,10 +2,28 @@
 #define HASHTABLE_H
 
 #include "constants.h"
+#include "utils.h"
 #include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
+#include <string>
+
+// pointer arithmetics to convert the pointer to HNode to pointer to Entry
+// using `typeof` gives me the following error:
+// `ISO C++ forbids declaration of ‘typeof’ with no type [-fpermissive]`
+#define container_of(ptr, type, member)                                        \
+    ({                                                                         \
+        const decltype(((type *)0)->member) *__mptr = (ptr);                   \
+        (type *)((char *)__mptr - offsetof(type, member));                     \
+    })
+/**
+ * `offsetof` is a macro
+ * expands to an integral constant expression of type size_t
+ * offset of from the beginning of an object of specified type to its specified
+ * subobject
+ * **noexcept**
+ */
 
 struct HNode {
     HNode *next = NULL;
@@ -22,6 +40,12 @@ struct HMap {
     HTable ht_to;
     HTable ht_from;
     size_t resizing_pos = 0;
+};
+
+struct Entry {
+    struct HNode node;
+    std::string key;
+    std::string val;
 };
 
 static void h_init(HTable *htable, size_t n) {
@@ -66,6 +90,29 @@ static HNode *h_detach(HTable *htable, HNode **from) {
     *from = (*from)->next;
     htable->size--;
     return node;
+}
+
+// scan through the entire hashtable and call f on every node
+static void h_scan(HTable *table, void (*f)(HNode *, void *), void *arg) {
+    if (table->size == 0) {
+        return;
+    }
+    for (size_t i = 0; i < table->mask + 1; ++i) {
+        HNode *node = table->table[i];
+        while (node) {
+            f(node, arg);
+            node = node->next;
+        }
+    }
+}
+
+static void cb_scan(HNode *node, void *arg) {
+    std::string &out = *(std::string *)arg;
+    out_str(out, container_of(node, Entry, node)->key);
+}
+
+static size_t hm_size(HMap *hmap) {
+    return hmap->ht_to.size + hmap->ht_from.size;
 }
 
 static void hm_help_resizing(HMap *hmap) {

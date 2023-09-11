@@ -151,4 +151,8 @@
 
 - When needing more space for the hashtable, we resize
 - To avoid stalling the server, keep two hashtables and _gradually_ move nodes between them
+
+### Data Serialization
+
+- The \***\*Type-Length-Value (TLV)\*\*** scheme
 -
