@@ -48,7 +48,7 @@ struct Entry {
     std::string val;
 };
 
-static void h_init(HTable *htable, size_t n) {
+void h_init(HTable *htable, size_t n) {
     assert(n > 0 && ((n - 1) & n) == 0); // make sure n is power of 2
     htable->table =
         (HNode **)calloc(sizeof(HNode *), n); // array of pointers to HNode
@@ -59,7 +59,7 @@ static void h_init(HTable *htable, size_t n) {
 /**
  * Insertion
  */
-static void h_insert(HTable *htable, HNode *node) {
+void h_insert(HTable *htable, HNode *node) {
     size_t pos = node->hcode & htable->mask;
     HNode *next = htable->table[pos];
     node->next = next;
@@ -67,8 +67,7 @@ static void h_insert(HTable *htable, HNode *node) {
     htable->size++;
 }
 
-static HNode **h_lookup(HTable *htable, HNode *key,
-                        bool (*cmp)(HNode *, HNode *)) {
+HNode **h_lookup(HTable *htable, HNode *key, bool (*cmp)(HNode *, HNode *)) {
     if (!htable->table) {
         return NULL;
     }
@@ -85,7 +84,7 @@ static HNode **h_lookup(HTable *htable, HNode *key,
     return NULL;
 }
 
-static HNode *h_detach(HTable *htable, HNode **from) {
+HNode *h_detach(HTable *htable, HNode **from) {
     HNode *node = *from;
     *from = (*from)->next;
     htable->size--;
@@ -93,7 +92,7 @@ static HNode *h_detach(HTable *htable, HNode **from) {
 }
 
 // scan through the entire hashtable and call f on every node
-static void h_scan(HTable *table, void (*f)(HNode *, void *), void *arg) {
+void h_scan(HTable *table, void (*f)(HNode *, void *), void *arg) {
     if (table->size == 0) {
         return;
     }
@@ -106,16 +105,14 @@ static void h_scan(HTable *table, void (*f)(HNode *, void *), void *arg) {
     }
 }
 
-static void cb_scan(HNode *node, void *arg) {
+void cb_scan(HNode *node, void *arg) {
     std::string &out = *(std::string *)arg;
     out_str(out, container_of(node, Entry, node)->key);
 }
 
-static size_t hm_size(HMap *hmap) {
-    return hmap->ht_to.size + hmap->ht_from.size;
-}
+size_t hm_size(HMap *hmap) { return hmap->ht_to.size + hmap->ht_from.size; }
 
-static void hm_help_resizing(HMap *hmap) {
+void hm_help_resizing(HMap *hmap) {
     if (hmap->ht_from.table == NULL) {
         return;
     }
@@ -139,7 +136,7 @@ static void hm_help_resizing(HMap *hmap) {
     }
 }
 
-static HNode *hm_lookup(HMap *hmap, HNode *key, bool (*cmp)(HNode *, HNode *)) {
+HNode *hm_lookup(HMap *hmap, HNode *key, bool (*cmp)(HNode *, HNode *)) {
     hm_help_resizing(hmap);
     HNode **from = h_lookup(&hmap->ht_to, key, cmp);
     if (!from) {
@@ -148,7 +145,7 @@ static HNode *hm_lookup(HMap *hmap, HNode *key, bool (*cmp)(HNode *, HNode *)) {
     return from ? *from : NULL;
 }
 
-static void hm_start_resizing(HMap *hmap) {
+void hm_start_resizing(HMap *hmap) {
     assert(hmap->ht_from.table == NULL);
     // create a bigger hashtable and swap them
     hmap->ht_from = hmap->ht_to;
@@ -156,7 +153,7 @@ static void hm_start_resizing(HMap *hmap) {
     hmap->resizing_pos = 0;
 }
 
-static void hm_insert(HMap *hmap, HNode *node) {
+void hm_insert(HMap *hmap, HNode *node) {
     if (!hmap->ht_to.table) {
         h_init(&hmap->ht_to, 4);
     }
@@ -172,7 +169,7 @@ static void hm_insert(HMap *hmap, HNode *node) {
     hm_help_resizing(hmap);
 }
 
-static HNode *hm_pop(HMap *hmap, HNode *key, bool (*cmp)(HNode *, HNode *)) {
+HNode *hm_pop(HMap *hmap, HNode *key, bool (*cmp)(HNode *, HNode *)) {
     hm_help_resizing(hmap);
 
     HNode **from = h_lookup(&hmap->ht_to, key, cmp);

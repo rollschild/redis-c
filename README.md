@@ -155,4 +155,13 @@
 ### Data Serialization
 
 - The \***\*Type-Length-Value (TLV)\*\*** scheme
+
+### The AVL Tree
+
+- Redis supports querying sorted data by rank
+- Redis actually uses **skiplist** for storing sorted data
+- Resources:
+  - https://brilliant.org/wiki/avl-tree/
+  - https://github.com/TheAlgorithms/C-Plus-Plus/blob/master/data_structures/avltree.cpp
+  - https://www.cs.yale.edu/homes/aspnes/pinewiki/C(2f)AvlTree.html
 -
