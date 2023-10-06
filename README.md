@@ -1,5 +1,19 @@
 # Simple Redis Implementation in C/C++
 
+## How to build and run the project
+
+### Build
+
+- At root level of the project, run:
+  1. `cmake . -B build`
+  2. `cmake --build build`
+
+### Run
+
+- Then in one terminal window/session, run the server `./build/src/server`
+- Open a new terminal window/session, run the client with arguments: `./build/src/client <args>`
+  - one example is to run the Python test script itself: `./src/test_commands.py`
+
 ## Notes
 
 ### Sockets
