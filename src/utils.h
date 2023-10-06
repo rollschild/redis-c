@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fcntl.h>
 #include <string>
 #include <strings.h>
@@ -90,11 +91,15 @@ static uint64_t str_hash(const uint8_t *data, size_t len) {
 
 static void out_nil(std::string &out) { out.push_back(SER_NIL); }
 
-static void out_str(std::string &out, const std::string &val) {
+static void out_str(std::string &out, const char *s, size_t size) {
     out.push_back(SER_STR);
-    uint32_t len = (uint32_t)(val.size());
+    uint32_t len = (uint32_t)size;
     out.append((char *)&len, 4);
-    out.append(val);
+    out.append(s, len);
+}
+
+static void out_str(std::string &out, const std::string &val) {
+    return out_str(out, val.data(), val.size());
 }
 
 static void out_int(std::string &out, int64_t val) {
@@ -113,6 +118,16 @@ static void out_err(std::string &out, int32_t code, const std::string &msg) {
 static void out_arr(std::string &out, uint32_t n) {
     out.push_back(SER_ARR);
     out.append((char *)&n, 4);
+}
+
+static void out_update_arr(std::string &out, uint32_t n) {
+    assert(out[0] == SER_ARR);
+    memcpy(&out[1], &n, 4);
+}
+
+static void out_double(std::string &out, double val) {
+    out.push_back(SER_DBL);
+    out.append((char *)&val, 8);
 }
 
 #endif /* UTILS_H */

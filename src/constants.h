@@ -13,12 +13,15 @@ enum {
     SER_ERR = 1, // Error code and message
     SER_STR = 2, // string
     SER_INT = 3, // int64
-    SER_ARR = 4, // array
+    SER_DBL = 4, // double
+    SER_ARR = 5, // array
 };
 
 enum {
     ERR_UNKNOWN = 1,
     ERR_2BIG = 2,
+    ERR_TYPE = 3,
+    ERR_ARG = 4,
 };
 
 #endif /* CONSTANTS_H */

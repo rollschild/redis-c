@@ -164,4 +164,14 @@
   - https://brilliant.org/wiki/avl-tree/
   - https://github.com/TheAlgorithms/C-Plus-Plus/blob/master/data_structures/avltree.cpp
   - https://www.cs.yale.edu/homes/aspnes/pinewiki/C(2f)AvlTree.html
--
+
+### The AVL Tree and the Sorted Set
+
+- Rank-Based Queries
+  - the primary use case of sorted sets
+  - range query - just a regular binary tree look-up, followed by an offset operation
+  - however, the **offset operation** is _not_ a regular binary tree walk
+- **Sorted Set**
+  - a Redis data type
+  - https://redis.io/docs/data-types/sorted-sets/
+  -

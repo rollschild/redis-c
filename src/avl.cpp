@@ -112,11 +112,6 @@ AVLNode *avl_rebalance(AVLNode *node) {
 }
 
 /**
- * Insertion
- */
-// AVLNode* avl_insert()
-
-/**
  * Delete a node
  * return **new** root of the tree
  */
@@ -161,4 +156,37 @@ AVLNode *avl_delete(AVLNode *node) {
             return victim;
         }
     }
+}
+
+AVLNode *avl_offset(AVLNode *node, int64_t offset) {
+    // offset is number of nodes we walk to get to the destination node
+    // offset can be negative if we need to walk upwards then go left
+    int64_t pos = 0; // relative to the starting node
+    while (offset != pos) {
+        if (pos < offset && pos + avl_count(node->right) >= offset) {
+            // target is inside the right subtree
+            node = node->right;
+            pos += avl_count(node->left) + 1;
+        } else if (pos > offset && pos - avl_count(node->left) <= offset) {
+            // target inside left subtree
+            node = node->left;
+            pos -= avl_count(node->right) + 1;
+        } else {
+            // go to parent
+            AVLNode *parent = node->parent;
+            if (!parent) {
+                return nullptr;
+            }
+
+            if (parent->right == node) {
+                pos -= avl_count(node->left) + 1;
+            } else {
+                pos += avl_count(node->right) + 1;
+            }
+
+            node = parent;
+        }
+    }
+
+    return node;
 }

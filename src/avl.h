@@ -7,7 +7,7 @@
 
 struct AVLNode {
     uint32_t depth = 0; // height of the tree
-    uint32_t count = 0; // size of the tree
+    uint32_t count = 0; // size of the tree, used by the avl_offset operation
     AVLNode *left = nullptr;
     AVLNode *right = nullptr;
     AVLNode *parent = nullptr;
@@ -29,5 +29,12 @@ AVLNode *avl_fix_right(AVLNode *root);
 AVLNode *avl_rebalance(AVLNode *node);
 
 AVLNode *avl_delete(AVLNode *node);
+
+/**
+ * Offset into the succeeding/preceding node
+ * NOTE: worst-case time complexity is O(log(n)), regardless of how long the
+ * offset is
+ */
+AVLNode *avl_offset(AVLNode *node, int64_t offset);
 
 #endif /* AVL_H */
