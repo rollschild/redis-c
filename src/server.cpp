@@ -1,9 +1,11 @@
 #include "avl.h"
 #include "constants.h"
 #include "hashtable.h"
+#include "list.h"
 #include "utils.h"
 #include "zset.h"
 #include <arpa/inet.h>
+#include <bits/types/struct_timespec.h>
 #include <cassert>
 #include <cmath>
 #include <cstddef>
@@ -20,6 +22,7 @@
 #include <sys/poll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 #include <vector>
 
@@ -103,7 +106,7 @@ enum {
 
 struct Conn {
     int fd = -1;
-    uint32_t state = STATE_REQ;
+    uint32_t state = STATE_REQ; /* either STATE_REQ or STATE_RES */
 
     // buffer for reading
     size_t rbuf_size = 0;
@@ -113,6 +116,9 @@ struct Conn {
     size_t wbuf_size = 0;
     size_t wbuf_sent = 0;
     uint8_t wbuf[4 + K_MAX_MSG]{};
+
+    uint64_t idle_start = 0;
+    DList idle_list; /* timer */
 };
 
 struct Entry {
@@ -165,7 +171,12 @@ static void state_res(Conn *conn) {
 }
 
 static std::map<std::string, std::string> g_map{};
-static struct { HMap db; } g_data;
+static struct {
+    HMap db;
+    std::vector<Conn *>
+        fd2conn;     /* map of all client connections, keyed by fd */
+    DList idle_list; /* Timers for idle connections */
+} g_data;
 
 static bool entry_eq(HNode *lhs, HNode *rhs) {
     struct Entry *le = container_of(lhs, struct Entry, node);
@@ -644,7 +655,16 @@ static void conn_put(std::vector<Conn *> &fd2conn, struct Conn *conn) {
     fd2conn[conn->fd] = conn;
 }
 
-static int32_t accept_new_conn(std::vector<Conn *> &fd2conn, int fd) {
+static uint64_t get_monotonic_usec() {
+    timespec tv{0, 0};
+    clock_gettime(CLOCK_MONOTONIC, &tv);
+    return (uint64_t)tv.tv_sec * 1000000 + tv.tv_nsec / 1000;
+}
+
+/**
+ * Initialize timers
+ */
+static int32_t accept_new_conn(int fd) {
     // accept
     struct sockaddr_in client_addr {};
     socklen_t socklen = sizeof(client_addr);
@@ -667,20 +687,84 @@ static int32_t accept_new_conn(std::vector<Conn *> &fd2conn, int fd) {
     conn->rbuf_size = 0;
     conn->wbuf_size = 0;
     conn->wbuf_sent = 0;
-    conn_put(fd2conn, conn);
+    conn->idle_start = get_monotonic_usec();
+    dlist_insert_before(&g_data.idle_list, &conn->idle_list);
+    conn_put(g_data.fd2conn, conn);
     return 0;
 }
 
-/*
+/**
  * state machine for client connections
+ * update timers
  */
 static void connection_io(Conn *conn) {
+    /**
+     * waked up by `poll`, update the idle timer by
+     * moving conn to the end of the linked list
+     */
+    conn->idle_start = get_monotonic_usec();
+    dlist_detach(&conn->idle_list);
+    dlist_insert_before(&g_data.idle_list, &conn->idle_list);
     if (conn->state == STATE_REQ) {
         state_req(conn);
     } else if (conn->state == STATE_RES) {
         state_res(conn);
     } else {
         assert(0); // not expected
+    }
+}
+
+/**
+ * Takes the first (nearest) timer from the list and uses it to calculate the
+ * timeout value of `poll()`
+ */
+static uint32_t next_timer_ms() {
+    if (dlist_is_empty(&g_data.idle_list)) {
+        return 10000;
+    }
+
+    uint64_t now_us = get_monotonic_usec();
+    Conn *next = container_of(g_data.idle_list.next, Conn, idle_list);
+
+    // Next point of time when the connection goes idle for more than
+    // K_IDLE_TIMEOUT_MS
+    uint32_t next_us = next->idle_start + K_IDLE_TIMEOUT_MS * 1000;
+
+    if (next_us <= now_us) {
+        // if now the connection already goes idle for more than
+        // K_IDLE_TIMEOUT_MS, it's meaningless
+        return 0;
+    }
+    return (uint32_t)((next_us - now_us) / 1000);
+}
+
+/**
+ * Remove the conn from the list when done
+ */
+static void conn_done(Conn *conn) {
+    g_data.fd2conn[conn->fd] = nullptr;
+    (void)close(conn->fd);
+    dlist_detach(&conn->idle_list);
+    free(conn);
+}
+
+/**
+ * At each iteration of the event loop, list is checked in order to fire timer
+ * at due time
+ */
+static void process_timers() {
+    uint64_t now_us = get_monotonic_usec();
+    while (!dlist_is_empty(&g_data.idle_list)) {
+        Conn *next = container_of(g_data.idle_list.next, Conn, idle_list);
+        uint64_t next_us = next->idle_start + K_IDLE_TIMEOUT_MS * 1000;
+        if (next_us >= now_us + 1000) {
+            // not ready
+            // the extra 1000us is for the ms resolution of `poll`
+            break;
+        }
+
+        printf("removing idle connection %d\n", next->fd);
+        conn_done(next);
     }
 }
 
@@ -694,6 +778,8 @@ int main() {
     // configure socket
     // SO_REUSEADDR - bind to the same address if restarted
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val));
+
+    dlist_init(&g_data.idle_list);
 
     // bind
     struct sockaddr_in addr {};
@@ -733,13 +819,13 @@ int main() {
     while (true) {
         // prepare the arguments of the poll()
         poll_args.clear();
-        // listening fd
+        // listening fd - the first pfd
         struct pollfd pfd {
             fd, POLLIN, 0
         };
         poll_args.push_back(pfd);
         // connection fds
-        for (Conn *conn : fd2conn) {
+        for (Conn *conn : g_data.fd2conn) {
             if (!conn) {
                 continue;
             }
@@ -752,7 +838,8 @@ int main() {
         }
 
         // poll for active fds
-        int rv = poll(poll_args.data(), (nfds_t)poll_args.size(), 1000);
+        int timeout_ms = (int)next_timer_ms();
+        int rv = poll(poll_args.data(), (nfds_t)poll_args.size(), timeout_ms);
         if (rv < 0) {
             die("poll");
         }
@@ -760,22 +847,24 @@ int main() {
         // process active connections
         for (size_t i = 1; i < poll_args.size(); ++i) {
             if (poll_args[i].revents) {
-                Conn *conn = fd2conn[poll_args[i].fd];
+                Conn *conn = g_data.fd2conn[poll_args[i].fd];
                 connection_io(conn);
 
                 if (conn->state == STATE_END) {
                     // client closed normally, or something BAD happened
                     // destroy the connection
-                    fd2conn[conn->fd] = nullptr;
-                    (void)close(conn->fd);
-                    free(conn);
+                    conn_done(conn);
                 }
             }
         }
 
+        // handle timers
+        // firing timers
+        process_timers();
+
         // try to accept a new connection if the listening fd is active
         if (poll_args[0].revents) {
-            (void)accept_new_conn(fd2conn, fd);
+            (void)accept_new_conn(fd);
         }
 
         /*

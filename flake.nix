@@ -40,6 +40,8 @@
 
             clang-tools
             llvm.clang
+
+            socat
           ];
 
           buildInputs = with pkgs;

@@ -188,4 +188,14 @@
 - **Sorted Set**
   - a Redis data type
   - https://redis.io/docs/data-types/sorted-sets/
-  -
+
+### Event Loop and Timers
+
+- _Every_ networked application needs to handle timeouts
+- we need **timers**
+  - timeout value of `poll` should be the timeout value of the _nearest_ timer (why..?)
+- Add timers to _kick out_ idle TCP connections
+- For each connection there is a timer, set to a fixed timeout into the future
+  - every time I/O activities occur on the connection, timer is _renewed_ to a fixed timeout
+- When a timer is renewed, it becomes the most distant one
+-
