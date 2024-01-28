@@ -1,3 +1,6 @@
+/**
+ * Doubly linked list
+ */
 struct DList {
     DList *prev = nullptr;
     DList *next = nullptr;

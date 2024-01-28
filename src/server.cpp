@@ -121,13 +121,82 @@ struct Conn {
     DList idle_list; /* timer */
 };
 
+/**
+ * Used to order timestamps
+ */
+struct HeapItem {
+    uint64_t val = 0;
+    // `ref` points to the `Entry`
+    size_t *ref = nullptr;
+};
+
 struct Entry {
     struct HNode node;
     std::string key;
     std::string val;
     uint32_t type = 0;
     ZSet *zset = nullptr;
+
+    // for TTLs
+    // index of the corresponding `HeapItem`
+    size_t heap_idx = -1;
 };
+
+static size_t heap_parent(size_t i) { return (i + 1) / 2 - 1; }
+static size_t heap_left_child(size_t i) { return i * 2 + 1; }
+static size_t heap_right_child(size_t i) { return i * 2 + 2; }
+
+static void heap_bubble_up(HeapItem *ptr, size_t pos) {
+    HeapItem item = ptr[pos];
+    while (pos > 0 && ptr[heap_parent(pos)].val > item.val) {
+        // swap with the parent
+        ptr[pos] = ptr[heap_parent(pos)];
+        *(ptr[pos].ref) = pos;
+        pos = heap_parent(pos);
+    }
+
+    ptr[pos] = item;
+    *(ptr[pos].ref) = pos;
+}
+
+static void heap_bubble_down(HeapItem *ptr, size_t pos, size_t len) {
+    HeapItem item = ptr[pos];
+    while (true) {
+        // find the smallest one among parent and its children
+        size_t l = heap_left_child(pos);
+        size_t r = heap_right_child(pos);
+        size_t min_pos = -1;
+        size_t min_val = item.val;
+        if (l < len && ptr[l].val < min_val) {
+            // swap and update min_pos & min_val
+            min_pos = l;
+            min_val = ptr[l].val;
+        }
+        if (r < len && ptr[r].val < min_val) {
+            // swap and update min_pos & min_val
+            min_pos = r;
+        }
+        if (min_pos == (size_t)-1) {
+            // pos already has min val
+            break;
+        }
+        // swap with the child
+        ptr[pos] = ptr[min_pos];
+        *(ptr[pos].ref) = pos;
+        pos = min_pos;
+    }
+
+    ptr[pos] = item;
+    *(ptr[pos].ref) = pos;
+}
+
+void heap_update(HeapItem *ptr, size_t pos, size_t len) {
+    if (pos > 0 && ptr[heap_parent(pos)].val > ptr[pos].val) {
+        heap_bubble_up(ptr, pos);
+    } else {
+        heap_bubble_down(ptr, pos, len);
+    }
+}
 
 /*
  * Flushes the write buffer until `EAGAIN` is returned;
@@ -174,9 +243,60 @@ static std::map<std::string, std::string> g_map{};
 static struct {
     HMap db;
     std::vector<Conn *>
-        fd2conn;     /* map of all client connections, keyed by fd */
-    DList idle_list; /* Timers for idle connections */
+        fd2conn;                /* map of all client connections, keyed by fd */
+    DList idle_list;            /* Timers for idle connections */
+    std::vector<HeapItem> heap; /* timers for TTLs */
 } g_data;
+
+static uint64_t get_monotonic_usec() {
+    timespec tv{0, 0};
+    clock_gettime(CLOCK_MONOTONIC, &tv);
+    return (uint64_t)tv.tv_sec * 1000000 + tv.tv_nsec / 1000;
+}
+
+/**
+ * Maintain TTL timers
+ * set or remove TTL
+ */
+static void entry_set_ttl(Entry *ent, int64_t ttl_ms) {
+    if (ttl_ms < 0 && ent->heap_idx != (size_t)-1) {
+        // erase the item from the heap
+        // by replacing it with the last item in the array
+        size_t pos = ent->heap_idx;
+        g_data.heap[pos] = g_data.heap.back();
+        g_data.heap.pop_back();
+        if (pos < g_data.heap.size()) {
+            heap_update(g_data.heap.data(), pos, g_data.heap.size());
+        }
+        ent->heap_idx = -1;
+    } else if (ttl_ms >= 0) {
+        size_t pos = ent->heap_idx;
+        if (pos == (size_t)-1) {
+            // add new item to the heap
+            HeapItem item;
+            item.ref = &ent->heap_idx;
+            g_data.heap.push_back(item);
+            pos = g_data.heap.size() - 1;
+        }
+        g_data.heap[pos].val = get_monotonic_usec() + (uint64_t)ttl_ms * 1000;
+        // always update from the first element of array (underlying the vector)
+        heap_update(g_data.heap.data(), pos, g_data.heap.size());
+    }
+}
+
+/**
+ * Remove the possible TTL timer when deleting an Entry
+ */
+static void entry_del(Entry *ent) {
+    switch (ent->type) {
+    case T_ZSET:
+        zset_dispose(ent->zset);
+        delete ent->zset;
+        break;
+    }
+    entry_set_ttl(ent, -1);
+    delete ent;
+}
 
 static bool entry_eq(HNode *lhs, HNode *rhs) {
     struct Entry *le = container_of(lhs, struct Entry, node);
@@ -247,16 +367,6 @@ static void do_set(std::vector<std::string> &cmd, std::string &out) {
     g_map.erase(cmd[1]);
     return RES_OK;
 } */
-
-static void entry_del(Entry *entry) {
-    switch (entry->type) {
-    case T_ZSET:
-        zset_dispose(entry->zset);
-        delete entry->zset;
-        break;
-    }
-    delete entry;
-}
 
 static void do_del(std::vector<std::string> &cmd, std::string &out) {
     Entry entry;
@@ -655,12 +765,6 @@ static void conn_put(std::vector<Conn *> &fd2conn, struct Conn *conn) {
     fd2conn[conn->fd] = conn;
 }
 
-static uint64_t get_monotonic_usec() {
-    timespec tv{0, 0};
-    clock_gettime(CLOCK_MONOTONIC, &tv);
-    return (uint64_t)tv.tv_sec * 1000000 + tv.tv_nsec / 1000;
-}
-
 /**
  * Initialize timers
  */
@@ -719,22 +823,34 @@ static void connection_io(Conn *conn) {
  * timeout value of `poll()`
  */
 static uint32_t next_timer_ms() {
-    if (dlist_is_empty(&g_data.idle_list)) {
-        return 10000;
+    uint64_t now_us = get_monotonic_usec();
+    uint64_t next_us = (uint64_t)-1;
+
+    // idle timers
+    if (!dlist_is_empty(&g_data.idle_list)) {
+        Conn *next = container_of(g_data.idle_list.next, Conn, idle_list);
+
+        // Next point of time when the connection goes idle for more than
+        // K_IDLE_TIMEOUT_MS
+        next_us = next->idle_start + K_IDLE_TIMEOUT_MS * 1000;
     }
 
-    uint64_t now_us = get_monotonic_usec();
-    Conn *next = container_of(g_data.idle_list.next, Conn, idle_list);
+    // ttl timers
+    if (!g_data.heap.empty() && g_data.heap[0].val < next_us) {
+        next_us = g_data.heap[0].val;
+    }
 
-    // Next point of time when the connection goes idle for more than
-    // K_IDLE_TIMEOUT_MS
-    uint32_t next_us = next->idle_start + K_IDLE_TIMEOUT_MS * 1000;
+    if (next_us == (uint64_t)-1) {
+        return 10000; // no timer, the value does _not_ matter
+    }
 
     if (next_us <= now_us) {
+        // missed?
         // if now the connection already goes idle for more than
         // K_IDLE_TIMEOUT_MS, it's meaningless
         return 0;
     }
+
     return (uint32_t)((next_us - now_us) / 1000);
 }
 
@@ -748,23 +864,42 @@ static void conn_done(Conn *conn) {
     free(conn);
 }
 
+static bool hnode_same(HNode *lhs, HNode *rhs) { return lhs == rhs; }
+
 /**
  * At each iteration of the event loop, list is checked in order to fire timer
  * at due time
  */
 static void process_timers() {
-    uint64_t now_us = get_monotonic_usec();
+    // the extra 1000us is for the ms resolution of `poll()`
+    uint64_t now_us = get_monotonic_usec() + 1000;
+
     while (!dlist_is_empty(&g_data.idle_list)) {
         Conn *next = container_of(g_data.idle_list.next, Conn, idle_list);
         uint64_t next_us = next->idle_start + K_IDLE_TIMEOUT_MS * 1000;
-        if (next_us >= now_us + 1000) {
+        if (next_us >= now_us) {
             // not ready
-            // the extra 1000us is for the ms resolution of `poll`
             break;
         }
 
         printf("removing idle connection %d\n", next->fd);
         conn_done(next);
+    }
+
+    // TTL timers
+    // Check the minimal value of the heap and remove keys
+    const size_t k_max_works = 2000;
+    size_t nworks = 0;
+    while (!g_data.heap.empty() && g_data.heap[0].val < now_us) {
+        Entry *entry = container_of(g_data.heap[0].ref, Entry, heap_idx);
+        HNode *node = hm_pop(&g_data.db, &entry->node, &hnode_same);
+        assert(node == &entry->node);
+        entry_del(entry);
+
+        if (nworks++ >= k_max_works) {
+            // do _NOT_ stall the server if too many keys are expiring at once
+            break;
+        }
     }
 }
 
@@ -811,8 +946,11 @@ int main() {
      * }
      */
     /*
-     * POLLIN - alert when data is ready to `recv()` on this socket
-     * POLLOUT - alert when data is ready to `send()` _to_ this socket _without
+     * POLLIN
+     *  - alert when data is ready to `recv()` on this socket
+     *  - there is data to read
+     * POLLOUT
+     *  - alert when data is ready to `send()` _to_ this socket _without
      * blocking_
      */
     std::vector<struct pollfd> poll_args{};
@@ -839,6 +977,15 @@ int main() {
 
         // poll for active fds
         int timeout_ms = (int)next_timer_ms();
+        // timeout_ms - the number of milliseconds `poll()` should _block_
+        // waiting for a file descriptor to become ready
+        // the call will block until _either_:
+        //  - a file descriptor becomes ready
+        //  - the call is interrupted by a signal handler, or
+        //  - timeout expires
+        // timeout of 0 caused `poll()` to return immediately
+        //
+        // *ready*: the requested operation will not block
         int rv = poll(poll_args.data(), (nfds_t)poll_args.size(), timeout_ms);
         if (rv < 0) {
             die("poll");

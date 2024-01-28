@@ -198,4 +198,10 @@
 - For each connection there is a timer, set to a fixed timeout into the future
   - every time I/O activities occur on the connection, timer is _renewed_ to a fixed timeout
 - When a timer is renewed, it becomes the most distant one
--
+
+### Heap Data Structure and TTL
+
+- **TTL** - one way to manage the size of cache
+- Heap data structure
+  - binary tree, packed in to array
+  - parent is no bigger than children
