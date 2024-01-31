@@ -855,6 +855,51 @@ static uint32_t next_timer_ms() {
 }
 
 /**
+ * Update TTL
+ */
+static void do_expire(std::vector<std::string> &cmd, std::string &out) {
+    int64_t ttl_ms = 0;
+    if (!str2int(cmd[2], ttl_ms)) {
+        return out_err(out, ERR_ARG, "expecting int64");
+    }
+
+    Entry entry;
+    entry.key.swap(cmd[1]);
+    entry.node.hcode = str_hash((uint8_t *)entry.key.data(), entry.key.size());
+
+    HNode *node = hm_lookup(&g_data.db, &entry.node, &entry_eq);
+    if (node) {
+        Entry *ent_found = container_of(node, Entry, node);
+        entry_set_ttl(ent_found, ttl_ms);
+    }
+
+    return out_int(out, node ? 1 : 0);
+}
+
+/**
+ * Query TTL
+ */
+static void do_ttl(std::vector<std::string> &cmd, std::string &out) {
+    Entry entry;
+    entry.key.swap(cmd[1]);
+    entry.node.hcode = str_hash((uint8_t *)entry.key.data(), entry.key.size());
+
+    HNode *node = hm_lookup(&g_data.db, &entry.node, &entry_eq);
+    if (!node) {
+        return out_int(out, -2);
+    }
+
+    Entry *ent_found = container_of(node, Entry, node);
+    if (ent_found->heap_idx == (size_t)-1) {
+        return out_int(out, -1);
+    }
+
+    uint64_t expire_at = g_data.heap[ent_found->heap_idx].val;
+    uint64_t now_us = get_monotonic_usec();
+    return out_int(out, expire_at > now_us ? (expire_at - now_us) / 1000 : 0);
+}
+
+/**
  * Remove the conn from the list when done
  */
 static void conn_done(Conn *conn) {
