@@ -2,6 +2,7 @@
 #include "constants.h"
 #include "hashtable.h"
 #include "list.h"
+#include "thread_pool.h"
 #include "utils.h"
 #include "zset.h"
 #include <arpa/inet.h>
@@ -246,6 +247,8 @@ static struct {
         fd2conn;                /* map of all client connections, keyed by fd */
     DList idle_list;            /* Timers for idle connections */
     std::vector<HeapItem> heap; /* timers for TTLs */
+    // thread pool
+    ThreadPool tp;
 } g_data;
 
 static uint64_t get_monotonic_usec() {
@@ -285,17 +288,43 @@ static void entry_set_ttl(Entry *ent, int64_t ttl_ms) {
 }
 
 /**
- * Remove the possible TTL timer when deleting an Entry
+ * Deallocate the key immediately
  */
-static void entry_del(Entry *ent) {
+static void entry_destroy(Entry *ent) {
     switch (ent->type) {
     case T_ZSET:
         zset_dispose(ent->zset);
         delete ent->zset;
         break;
     }
-    entry_set_ttl(ent, -1);
     delete ent;
+}
+
+static void entry_del_async(void *arg) { entry_destroy((Entry *)arg); }
+
+/**
+ * Dispose the entry after it got attached from the key space
+ * Remove the possible TTL timer when deleting an Entry
+ * Put the destruction of large sorted sets into the thread pool
+ *   - thread pool is _only_ for the large ones since multi-threading has some
+ * overheads too
+ */
+static void entry_del(Entry *ent) {
+    entry_set_ttl(ent, -1);
+    const size_t k_large_container_size = 10000;
+    bool too_big = false;
+
+    switch (ent->type) {
+    case T_ZSET:
+        too_big = hm_size(&ent->zset->hmap) > k_large_container_size;
+        break;
+    }
+
+    if (too_big) {
+        thread_pool_queue(&g_data.tp, &entry_del_async, ent);
+    } else {
+        entry_destroy(ent);
+    }
 }
 
 static bool entry_eq(HNode *lhs, HNode *rhs) {
@@ -960,6 +989,7 @@ int main() {
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &val, sizeof(val));
 
     dlist_init(&g_data.idle_list);
+    thread_pool_init(&(g_data.tp), 4);
 
     // bind
     struct sockaddr_in addr {};

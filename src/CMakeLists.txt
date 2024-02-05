@@ -1,5 +1,6 @@
 add_executable(server)
-target_sources(server PRIVATE server.cpp avl.cpp hashtable.cpp zset.cpp list.h)
+target_sources(server PRIVATE server.cpp avl.cpp hashtable.cpp zset.cpp list.h
+                              thread_pool.cpp)
 
 add_executable(client)
 target_sources(client PRIVATE client.cpp)

@@ -205,3 +205,13 @@
 - Heap data structure
   - binary tree, packed in to array
   - parent is no bigger than children
+
+### Thread Pool & Async Tasks
+
+- thread from the thread pool consumes tasks form a **queue** and executes them
+- `pthread` API
+  - `pthread_mutex_t`
+  - `pthread_cond_t`
+    - wakes up consumer threads only when the queue is not empty
+    - consumer threads should be sleeping when idle
+-
